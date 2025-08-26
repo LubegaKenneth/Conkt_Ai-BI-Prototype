@@ -1,0 +1,796 @@
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import io
+import time
+import json
+from datetime import datetime, timedelta
+import random
+import re
+
+# Configure Streamlit page
+st.set_page_config(
+    page_title="Conkt BI",
+    page_icon="🧠",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom CSS for ChatGPT-inspired styling
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    body { font-family: 'Inter', sans-serif; color: #d1d5db; background-color: #121212; font-size: 1.1rem; }
+    .stApp { background-color: #121212; }
+    .sidebar .sidebar-content {
+        background-color: #202123;
+        border-right: 1px solid #343541;
+        padding: 1rem;
+    }
+    .sidebar .stRadio > label {
+        color: #d1d5db;
+        font-size: 1.1rem;
+        font-weight: 500;
+        padding: 0.75rem 1rem;
+        border-radius: 6px;
+        transition: background-color 0.2s;
+    }
+    .sidebar .stRadio > label:hover {
+        background-color: #343541;
+    }
+    .sidebar .stRadio > div { background-color: transparent; }
+    h1 { color: #e5e7eb; font-size: 2.2rem; font-weight: 700; }
+    h2 { color: #e5e7eb; font-size: 1.8rem; font-weight: 600; }
+    h3 { color: #e5e7eb; font-size: 1.5rem; font-weight: 600; }
+    p, div, span, label { color: #d1d5db; font-size: 1.1rem; }
+    .stButton > button {
+        background-color: #343541;
+        color: #d1d5db;
+        border: none;
+        border-radius: 6px;
+        padding: 0.75rem 1.5rem;
+        font-size: 1.1rem;
+        font-weight: 500;
+        transition: background-color 0.2s;
+    }
+    .stButton > button:hover {
+        background-color: #4b5563;
+    }
+    .stMetric {
+        color: #d1d5db;
+        background-color: #202123;
+        border-radius: 6px;
+        padding: 1rem;
+        font-size: 1.3rem;
+        font-weight: 600;
+    }
+    .insight-card {
+        background-color: #202123;
+        color: #d1d5db;
+        padding: 1.5rem;
+        border-radius: 6px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        margin-bottom: 1rem;
+        font-size: 1.3rem;
+    }
+    .insight-card h3 {
+        color: #d1d5db;
+        font-size: 1.6rem;
+        font-weight: 600;
+        margin: 0 0 0.5rem 0;
+    }
+    .chat-user {
+        background-color: #343541;
+        color: #ffffff;
+        padding: 1rem;
+        border-radius: 6px;
+        margin: 0.5rem 0;
+        text-align: right;
+        font-size: 1.1rem;
+    }
+    .chat-ai {
+        background-color: #202123;
+        color: #ffffff;
+        padding: 1rem;
+        border-radius: 6px;
+        margin: 0.5rem 0;
+        font-size: 1.1rem;
+    }
+    .main-container {
+        text-align: center;
+        padding: 2rem 0;
+        background: linear-gradient(135deg, #202123 0%, #343541 100%);
+        color: #e5e7eb;
+        border-radius: 8px;
+        margin-bottom: 2rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Initialize session state
+if 'uploaded_data' not in st.session_state:
+    st.session_state.uploaded_data = None
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = []
+if 'auto_insights' not in st.session_state:
+    st.session_state.auto_insights = []
+if 'mock_data_generated' not in st.session_state:
+    st.session_state.mock_data_generated = False
+
+# Mock Data Generation
+def generate_mock_data():
+    np.random.seed(42)
+    random.seed(42)
+    
+    start_date = datetime(2025, 1, 1)
+    dates = [start_date + timedelta(days=x) for x in range(100)]
+    
+    regions = ['North America', 'Europe', 'Asia Pacific', 'Latin America', 'Middle East']
+    product_categories = ['Electronics', 'Clothing', 'Home Goods', 'Books', 'Accessories']
+    customer_segments = ['Enterprise', 'SMB', 'Consumer']
+    
+    data = {
+        'Transaction_Date': [random.choice(dates) for _ in range(100)],
+        'Region': [random.choice(regions) for _ in range(100)],
+        'Product_Category': [random.choice(product_categories) for _ in range(100)],
+        'Customer_Segment': [random.choice(customer_segments) for _ in range(100)],
+        'Revenue': [round(random.uniform(1000, 50000), 2) for _ in range(100)],
+        'Orders': [random.randint(1, 50) for _ in range(100)],
+        'Customers': [random.randint(1, 20) for _ in range(100)],
+        'Profit': [round(random.uniform(-500, 10000), 2) for _ in range(100)],
+        'Unit_Price': [round(random.uniform(10, 500), 2) for _ in range(100)],
+        'Currency': ['USD'] * 100
+    }
+    
+    df = pd.DataFrame(data)
+    df['Revenue'] = df['Revenue'] + (np.arange(len(df)) * 100)
+    df.loc[10:15, 'Revenue'] = df.loc[10:15, 'Revenue'] * 3
+    df.loc[90:95, 'Profit'] = df.loc[90:95, 'Profit'] * -2
+    df = pd.concat([df, df.iloc[:5]], ignore_index=True)
+    df.loc[20:22, 'Revenue'] = np.nan
+    df.loc[30:32, 'Customers'] = np.nan
+    df = df.sort_values('Transaction_Date').reset_index(drop=True)
+    
+    # Ensure Transaction_Date is datetime
+    df['Transaction_Date'] = pd.to_datetime(df['Transaction_Date'], errors='coerce')
+    
+    return df
+
+# Simulated OpenAI API Integration
+def simulate_openai_response(query, data_context=""):
+    time.sleep(1)
+    query_lower = query.lower()
+    
+    responses = {
+        'revenue trends': "Revenue shows a 46% increase from January to April 2025, driven by customer acquisition.",
+        'top products': "'Electronics' leads with 35% market share, followed by 'Clothing' at 25%.",
+        'regional performance': "Asia Pacific has the highest growth at 15.2%, followed by North America at 12.5%.",
+        'customer insights': "Customer acquisition grew by 63% year-over-year, with 89% retention in Enterprise segments.",
+        'sales forecast': "Q2 2025 revenue projected at $105K–$110K with 87% confidence.",
+        'data quality': f"Dataset has {len(st.session_state.uploaded_data) if st.session_state.uploaded_data is not None else 'sample'} records with 94% completeness.",
+        'market analysis': "Market share grew, with 78% positive customer sentiment.",
+        'operational efficiency': "Order fulfillment speed improved by 23%, supply chain costs down by 11%.",
+        'default': "Conkt BI provides AI-powered insights. Try asking about 'revenue trends', 'top products', or 'sales forecast'."
+    }
+    
+    for key, response in responses.items():
+        if key in query_lower:
+            return response
+    return responses['default']
+
+# Utility Functions
+def detect_column_types(df):
+    if df.empty:
+        raise ValueError("Dataset is empty.")
+    numeric_columns = []
+    categorical_columns = []
+    
+    for col in df.columns:
+        if pd.api.types.is_numeric_dtype(df[col]):
+            numeric_columns.append(col)
+        else:
+            categorical_columns.append(col)
+    
+    return numeric_columns, categorical_columns
+
+def detect_date_columns(df):
+    date_columns = []
+    for col in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            date_columns.append(col)
+        elif any(word in col.lower() for word in ['date', 'time', 'month', 'year', 'day']):
+            try:
+                df[col] = pd.to_datetime(df[col], errors='coerce')
+                if df[col].notna().sum() > 0:
+                    date_columns.append(col)
+            except:
+                pass
+    return date_columns
+
+@st.cache_data
+def calculate_advanced_metrics(df, numeric_cols):
+    metrics = {}
+    for col in numeric_cols:
+        values = pd.to_numeric(df[col], errors='coerce').dropna()
+        if len(values) > 0:
+            metrics[col] = {
+                'total': values.sum(),
+                'average': values.mean(),
+                'median': values.median(),
+                'std': values.std(),
+                'min': values.min(),
+                'max': values.max(),
+                'trend': calculate_trend(values),
+                'growth_rate': calculate_growth_rate(values),
+                'volatility': calculate_volatility(values)
+            }
+    return metrics
+
+def calculate_trend(values):
+    if len(values) < 2:
+        return 0
+    x = np.arange(len(values))
+    coefficients = np.polyfit(x, values, 1)
+    slope = coefficients[0]
+    mean_val = np.mean(values)
+    return (slope / mean_val) * 100 if mean_val != 0 else 0
+
+def calculate_growth_rate(values):
+    if len(values) < 2:
+        return 0
+    first_val = values.iloc[0] if hasattr(values, 'iloc') else values[0]
+    last_val = values.iloc[-1] if hasattr(values, 'iloc') else values[-1]
+    return ((last_val - first_val) / first_val) * 100 if first_val != 0 else 0
+
+def calculate_volatility(values):
+    if len(values) < 2:
+        return 0
+    mean_val = np.mean(values)
+    std_val = np.std(values)
+    return (std_val / mean_val) * 100 if mean_val != 0 else 0
+
+@st.cache_data
+def generate_comprehensive_insights(df):
+    insights = []
+    numeric_cols, categorical_cols = detect_column_types(df)
+    
+    insights.append({
+        'type': 'overview',
+        'title': 'Data Overview',
+        'insight': f'Your dataset contains {len(df):,} records with {len(numeric_cols)} numeric and {len(categorical_cols)} categorical columns. Data completeness: {(df.notna().sum().sum() / (len(df) * len(df.columns)) * 100):.1f}%.',
+        'priority': 'high'
+    })
+    
+    if numeric_cols:
+        primary_metric = numeric_cols[0]
+        metric_data = calculate_advanced_metrics(df, [primary_metric])[primary_metric]
+        trend_desc = "strong upward" if metric_data['trend'] > 10 else "upward" if metric_data['trend'] > 0 else "declining"
+        insights.append({
+            'type': 'performance',
+            'title': f'{primary_metric} Performance',
+            'insight': f'{primary_metric} shows {trend_desc} momentum with {metric_data["trend"]:.1f}% trend coefficient. Total: {metric_data["total"]:,.2f}, Average: {metric_data["average"]:.2f}.',
+            'priority': 'high'
+        })
+    
+    if categorical_cols and numeric_cols:
+        segment_col = categorical_cols[0]
+        value_col = numeric_cols[0]
+        segment_analysis = df.groupby(segment_col)[value_col].agg(['sum', 'mean', 'count']).sort_values('sum', ascending=False)
+        top_segment = segment_analysis.index[0]
+        segment_concentration = (segment_analysis.loc[top_segment, 'sum'] / segment_analysis['sum'].sum()) * 100
+        insights.append({
+            'type': 'segmentation',
+            'title': f'{segment_col} Segmentation',
+            'insight': f'"{top_segment}" dominates with {segment_concentration:.1f}% concentration. Top 3 segments account for {(segment_analysis.head(3)["sum"].sum() / segment_analysis["sum"].sum() * 100):.1f}% of total value.',
+            'priority': 'medium'
+        })
+    
+    if numeric_cols:
+        anomaly_col = numeric_cols[0]
+        values = pd.to_numeric(df[anomaly_col], errors='coerce').dropna()
+        Q1 = values.quantile(0.25)
+        Q3 = values.quantile(0.75)
+        IQR = Q3 - Q1
+        outliers = values[(values < Q1 - 1.5 * IQR) | (values > Q3 + 1.5 * IQR)]
+        if len(outliers) > 0:
+            insights.append({
+                'type': 'anomaly',
+                'title': 'Anomaly Detection',
+                'insight': f'Identified {len(outliers)} outliers in {anomaly_col} ({(len(outliers)/len(values)*100):.1f}% of data). Range: {outliers.min():.2f} to {outliers.max():.2f}.',
+                'priority': 'high'
+            })
+    
+    if len(numeric_cols) >= 2:
+        col1, col2 = numeric_cols[:2]
+        correlation = df[col1].corr(df[col2])
+        insights.append({
+            'type': 'predictive',
+            'title': 'Predictive Analytics',
+            'insight': f'{col1} and {col2} show {abs(correlation):.2f} correlation, indicating {"strong" if abs(correlation) > 0.7 else "moderate" if abs(correlation) > 0.4 else "weak"} relationship.',
+            'priority': 'medium'
+        })
+    
+    return sorted(insights, key=lambda x: {'high': 3, 'medium': 2, 'low': 1}[x['priority']], reverse=True)[:5]
+
+def create_advanced_visualizations(df, chart_type, cols):
+    numeric_cols, categorical_cols = detect_column_types(df)
+    date_cols = detect_date_columns(df)
+    
+    if chart_type == 'overview_dashboard':
+        fig = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=('Revenue Trends', 'Performance Distribution', 'Category Breakdown', 'Growth Analysis'),
+            specs=[[{"secondary_y": True}, {"type": "bar"}],
+                   [{"type": "pie"}, {"type": "scatter"}]]
+        )
+        
+        if numeric_cols:
+            x_axis = df[date_cols[0]] if date_cols else df.index
+            fig.add_trace(
+                go.Scatter(x=x_axis, y=df[numeric_cols[0]], name=numeric_cols[0], line=dict(width=3, color='#1f77b4')),
+                row=1, col=1
+            )
+            if categorical_cols:
+                grouped = df.groupby(categorical_cols[0])[numeric_cols[0]].sum().head(5)
+                fig.add_trace(
+                    go.Bar(x=grouped.index, y=grouped.values, name="Top Categories"),
+                    row=1, col=2
+                )
+                fig.add_trace(
+                    go.Pie(labels=grouped.index, values=grouped.values, name="Distribution"),
+                    row=2, col=1
+                )
+        
+        fig.update_layout(
+            height=800,
+            title_text="Conkt BI Dashboard",
+            title_font=dict(size=24, color='#d1d5db'),
+            template="plotly_dark",
+            font=dict(color='#d1d5db')
+        )
+        return fig
+    
+    elif chart_type == 'trend_analysis':
+        if numeric_cols:
+            x_axis = df[date_cols[0]] if date_cols else df.index
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=x_axis,
+                y=df[numeric_cols[0]],
+                mode='lines+markers',
+                name=numeric_cols[0],
+                line=dict(width=3, color='#1f77b4')
+            ))
+            if len(df[numeric_cols[0]].dropna()) > 0:
+                z = np.polyfit(range(len(df)), df[numeric_cols[0]].dropna(), 1)
+                p = np.poly1d(z)
+                fig.add_trace(go.Scatter(
+                    x=x_axis,
+                    y=p(range(len(df))),
+                    mode='lines',
+                    name='Trend Line',
+                    line=dict(dash='dash', color='red')
+                ))
+            fig.update_layout(
+                title=f'{numeric_cols[0]} Trend Analysis',
+                title_font=dict(size=20, color='#d1d5db'),
+                xaxis_title='Period',
+                yaxis_title=numeric_cols[0],
+                template="plotly_dark",
+                font=dict(color='#d1d5db')
+            )
+            return fig
+    
+    elif chart_type == 'Line Chart':
+        if numeric_cols and cols[0]:
+            x_axis = df[date_cols[0]] if date_cols else df.index
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=x_axis,
+                y=df[cols[0]],
+                mode='lines+markers',
+                name=cols[0],
+                line=dict(width=3, color='#1f77b4')
+            ))
+            fig.update_layout(
+                title=f"{cols[0]} Trend Analysis",
+                title_font=dict(size=20, color='#d1d5db'),
+                template="plotly_dark",
+                font=dict(color='#d1d5db')
+            )
+            return fig
+    
+    elif chart_type == 'Bar Chart':
+        if categorical_cols and cols[0] and cols[1]:
+            grouped = df.groupby(cols[1])[cols[0]].sum().sort_values(ascending=False).head(10)
+            fig = px.bar(
+                x=grouped.index,
+                y=grouped.values,
+                title=f"{cols[0]} by {cols[1]}",
+                template="plotly_dark",
+                labels={'x': cols[1], 'y': cols[0]}
+            )
+            fig.update_layout(
+                title_font=dict(size=20, color='#d1d5db'),
+                font=dict(color='#d1d5db')
+            )
+            return fig
+    
+    elif chart_type == 'Pie Chart':
+        if categorical_cols and cols[0] and cols[1]:
+            grouped = df.groupby(cols[1])[cols[0]].sum().head(8)
+            fig = px.pie(
+                names=grouped.index,
+                values=grouped.values,
+                title=f"{cols[0]} Distribution by {cols[1]}",
+                template="plotly_dark"
+            )
+            fig.update_layout(
+                title_font=dict(size=20, color='#d1d5db'),
+                font=dict(color='#d1d5db')
+            )
+            return fig
+    
+    elif chart_type == 'Scatter Plot':
+        if len(numeric_cols) >= 2:
+            x_col = cols[0] if cols[0] else numeric_cols[0]
+            y_col = numeric_cols[1]
+            fig = px.scatter(
+                df,
+                x=x_col,
+                y=y_col,
+                trendline="ols",
+                title=f"{x_col} vs {y_col}",
+                template="plotly_dark"
+            )
+            fig.update_layout(
+                title_font=dict(size=20, color='#d1d5db'),
+                font=dict(color='#d1d5db')
+            )
+            return fig
+    
+    return None
+
+def process_advanced_nlp_query(query, df):
+    query = re.sub(r'[^\w\s?]', '', query)
+    if not query.strip():
+        return "Please enter a valid query.", None
+    
+    query_lower = query.lower()
+    numeric_cols, categorical_cols = detect_column_types(df)
+    
+    try:
+        with st.spinner("Processing with Conkt AI..."):
+            ai_response = simulate_openai_response(query)
+            chart = None
+            
+            if any(word in query_lower for word in ['trend', 'over time', 'time series', 'forecast']):
+                chart = create_advanced_visualizations(df, 'trend_analysis', numeric_cols)
+            elif any(word in query_lower for word in ['dashboard', 'overview', 'summary']):
+                chart = create_advanced_visualizations(df, 'overview_dashboard', None)
+            elif any(word in query_lower for word in ['compare', 'comparison', 'vs']):
+                if len(numeric_cols) >= 2:
+                    chart = px.scatter(
+                        df,
+                        x=numeric_cols[0],
+                        y=numeric_cols[1],
+                        title=f'{numeric_cols[0]} vs {numeric_cols[1]} Analysis',
+                        trendline="ols",
+                        template="plotly_dark"
+                    )
+                    chart.update_layout(
+                        title_font=dict(size=20, color='#d1d5db'),
+                        font=dict(color='#d1d5db')
+                    )
+            elif any(word in query_lower for word in ['top', 'best', 'highest', 'ranking']):
+                if numeric_cols and categorical_cols:
+                    grouped = df.groupby(categorical_cols[0])[numeric_cols[0]].sum().sort_values(ascending=False).head(8)
+                    chart = px.bar(
+                        x=grouped.index,
+                        y=grouped.values,
+                        title=f'Top {categorical_cols[0]} Performance',
+                        labels={'x': categorical_cols[0], 'y': numeric_cols[0]},
+                        template="plotly_dark"
+                    )
+                    chart.update_layout(
+                        title_font=dict(size=20, color='#d1d5db'),
+                        font=dict(color='#d1d5db')
+                    )
+            
+            return ai_response, chart
+        
+    except Exception as e:
+        return f"Error processing query: {str(e)}", None
+
+def validate_data(df):
+    issues = []
+    if df.duplicated().sum() > 0:
+        issues.append(f"Found {df.duplicated().sum()} duplicate rows")
+    if df.isna().sum().sum() > len(df) * 0.5:
+        issues.append("High missing value rate (>50%)")
+    return issues
+
+# Main Application
+def main():
+    st.markdown("""
+    <div class="main-container">
+        <h1 style="font-size: 2.2rem; margin-bottom: 0.5rem;">Conkt BI</h1>
+        <h2 style="font-size: 1.8rem; margin-bottom: 0.5rem;">AI-Powered Business Intelligence</h2>
+        <p style="font-size: 1.1rem; opacity: 0.9;">Actionable Insights for Your Business</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    with st.sidebar:
+        st.markdown("### Navigation")
+        tab = st.radio(
+            "Select Module:",
+            ["Data Upload", "Overview Dashboard", "Advanced Analytics", "AI Assistant"],
+            help="Navigate between analysis modules",
+            key="nav_radio"
+        )
+        
+        if st.session_state.uploaded_data is not None:
+            df = st.session_state.uploaded_data
+            numeric_cols, categorical_cols = detect_column_types(df)
+            st.markdown("### Data Status")
+            st.success(f"{len(df):,} records loaded")
+            st.info(f"{len(numeric_cols)} numeric columns")
+            st.info(f"{len(categorical_cols)} categorical columns")
+            if st.button("Refresh Insights", key="refresh_insights"):
+                st.session_state.auto_insights = generate_comprehensive_insights(df)
+                st.success("Insights refreshed!")
+        
+        st.markdown("### Try Demo Data")
+        st.markdown("Explore Conkt BI with sample sales data.")
+        if st.button("Load Sample Data", key="load_sample"):
+            try:
+                df = generate_mock_data()
+                st.session_state.uploaded_data = df
+                st.session_state.auto_insights = generate_comprehensive_insights(df)
+                st.session_state.mock_data_generated = True
+                st.success("Demo data loaded successfully!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error loading sample data: {str(e)}")
+        
+        st.markdown("### Clear Data")
+        if st.button("Clear Data", key="clear_data"):
+            st.session_state.uploaded_data = None
+            st.session_state.auto_insights = []
+            st.session_state.chat_history = []
+            st.session_state.mock_data_generated = False
+            st.success("Data cleared!")
+            st.rerun()
+        
+        st.markdown("### Feedback")
+        with st.form("feedback_form"):
+            feedback = st.text_area("Share your thoughts", height=100)
+            submitted = st.form_submit_button("Submit")
+            if submitted and feedback.strip():
+                try:
+                    with open('feedback.txt', 'a') as f:
+                        f.write(f"{datetime.now().isoformat()}: {feedback}\n")
+                    st.success("Thank you for your feedback!")
+                except Exception as e:
+                    st.error(f"Error saving feedback: {str(e)}")
+
+    if tab == "Data Upload":
+        st.header("Data Upload & Auto-Analysis")
+        st.markdown("Upload your business data to generate insights.")
+        
+        uploaded_file = st.file_uploader(
+            "Choose CSV or Excel file",
+            type=['csv', 'xlsx', 'xls'],
+            help="Supported formats: CSV, Excel (.xlsx, .xls). Max size: 10MB"
+        )
+        
+        if uploaded_file is not None:
+            try:
+                if uploaded_file.size > 10 * 1024 * 1024:
+                    raise ValueError("File size exceeds 10MB limit.")
+                with st.spinner("Processing your data..."):
+                    if uploaded_file.name.endswith('.csv'):
+                        df = pd.read_csv(uploaded_file)
+                    elif uploaded_file.name.endswith(('.xlsx', '.xls')):
+                        df = pd.read_excel(uploaded_file, engine='openpyxl')
+                    else:
+                        raise ValueError("Unsupported file format.")
+                    
+                    if len(df) > 10000:
+                        st.warning("Large dataset detected (>10,000 rows). Sampling to 10,000 rows for performance.")
+                        df = df.sample(10000, random_state=42)
+                    
+                    df = df.dropna(how='all').reset_index(drop=True)
+                    if df.empty:
+                        raise ValueError("Uploaded file is empty.")
+                    
+                    for col in df.columns:
+                        if any(word in col.lower() for word in ['date', 'time', 'month', 'year', 'day']):
+                            df[col] = pd.to_datetime(df[col], errors='coerce')
+                    
+                    issues = validate_data(df)
+                    if issues:
+                        st.warning("Data issues detected: " + "; ".join(issues))
+                    
+                    st.session_state.uploaded_data = df
+                    st.session_state.auto_insights = generate_comprehensive_insights(df)
+                    st.session_state.mock_data_generated = False
+                
+                st.success("Data uploaded and analyzed successfully!")
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Records", len(df), help="Total number of data rows")
+                with col2:
+                    st.metric("Columns", len(df.columns), help="Total number of data columns")
+                with col3:
+                    numeric_cols, _ = detect_column_types(df)
+                    st.metric("Numeric Metrics", len(numeric_cols), help="Columns with numeric data")
+            
+            except ImportError as ie:
+                st.error(f"Missing dependency: {str(ie)}. Please install 'openpyxl' with 'pip install openpyxl'.")
+            except ValueError as ve:
+                st.error(f"Data validation error: {str(ve)}")
+            except Exception as e:
+                st.error(f"Error processing file: {str(e)}")
+    
+    elif tab == "Overview Dashboard":
+        st.header("Overview Dashboard")
+        
+        if st.session_state.uploaded_data is None:
+            st.warning("Please upload data or load sample data to view dashboard")
+            return
+        
+        df = st.session_state.uploaded_data
+        numeric_cols, categorical_cols = detect_column_types(df)
+        
+        st.subheader("Key Performance Indicators")
+        kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
+        with kpi_col1:
+            st.metric("Records", f"{len(df):,}", help="Total number of data rows")
+        with kpi_col2:
+            if numeric_cols:
+                avg_value = df[numeric_cols[0]].mean()
+                st.metric(f"Avg {numeric_cols[0]}", f"{avg_value:,.2f}", help=f"Average value of {numeric_cols[0]}")
+        with kpi_col3:
+            if categorical_cols:
+                unique_categories = df[categorical_cols[0]].nunique()
+                st.metric(f"Unique {categorical_cols[0]}", f"{unique_categories}", help=f"Unique values in {categorical_cols[0]}")
+        with kpi_col4:
+            data_quality = (df.notna().sum().sum() / (len(df) * len(df.columns)) * 100)
+            st.metric("Data Quality", f"{data_quality:.1f}%", help="Percentage of non-missing data")
+        
+        st.subheader("Auto-Generated Insights")
+        insights = st.session_state.auto_insights
+        if insights:
+            for insight in insights:
+                st.markdown(f"""
+                <div class="insight-card">
+                    <h3>{insight['title']}</h3>
+                    <p>{insight['insight']}</p>
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.info("No insights generated yet. Try refreshing or uploading new data.")
+        
+        st.subheader("Interactive Dashboard")
+        fig = create_advanced_visualizations(df, 'overview_dashboard', None)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("Insufficient data for dashboard visualization.")
+        
+        st.subheader("Export Data")
+        if st.button("Download Processed Data as CSV", key="export_csv"):
+            csv = df.to_csv(index=False)
+            st.download_button("Download CSV", csv, "conkt_processed_data.csv", "text/csv")
+        
+        if st.session_state.auto_insights and st.button("Download Insights as JSON", key="export_json"):
+            insights_data = {
+                "app": "Conkt BI",
+                "generated": datetime.now().isoformat(),
+                "insights": st.session_state.auto_insights
+            }
+            json_data = json.dumps(insights_data, indent=4)
+            st.download_button("Download JSON", json_data, "conkt_insights.json", "application/json")
+    
+    elif tab == "Advanced Analytics":
+        st.header("Advanced Analytics & Visualizations")
+        
+        if st.session_state.uploaded_data is None:
+            st.warning("Please upload data or load sample data to perform advanced analytics")
+            return
+        
+        df = st.session_state.uploaded_data
+        numeric_cols, categorical_cols = detect_column_types(df)
+        date_cols = detect_date_columns(df)
+        
+        st.subheader("Analysis Filters")
+        selected_numeric = st.selectbox("Select Numeric Column for Analysis", numeric_cols, key="numeric_select")
+        selected_categorical = st.selectbox("Select Categorical Column", categorical_cols, key="categorical_select") if categorical_cols else None
+        
+        if date_cols:
+            date_col = st.selectbox("Select Date Column", date_cols, key="date_select")
+            try:
+                df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+                if df[date_col].isna().all():
+                    st.error(f"The selected date column '{date_col}' contains no valid dates. Please check the data format.")
+                    return
+                
+                min_date = df[date_col].min()
+                max_date = df[date_col].max()
+                if pd.isna(min_date) or pd.isna(max_date):
+                    st.error(f"Invalid date range in '{date_col}'. Please ensure valid dates are present.")
+                    return
+                
+                if isinstance(min_date, pd.Timestamp):
+                    min_date, max_date = min_date.date(), max_date.date()
+                date_range = st.date_input("Select Date Range", [min_date, max_date], help="Filter data by date range", key="date_range")
+                
+                if len(date_range) == 2:
+                    start_date, end_date = date_range
+                    try:
+                        filtered_df = df[(df[date_col] >= pd.to_datetime(start_date)) & (df[date_col] <= pd.to_datetime(end_date))]
+                        if filtered_df.empty:
+                            st.warning("No data available for the selected date range.")
+                        else:
+                            df = filtered_df
+                    except Exception as e:
+                        st.error(f"Error filtering by date: {str(e)}. Ensure '{date_col}' has valid date formats (e.g., YYYY-MM-DD).")
+                        return
+            except Exception as e:
+                st.error(f"Error processing date column '{date_col}': {str(e)}. Please check the data format.")
+                return
+        
+        st.subheader("Custom Visualizations")
+        viz_type = st.selectbox("Select Visualization Type", ["Line Chart", "Bar Chart", "Pie Chart", "Scatter Plot"], key="viz_type")
+        
+        fig = create_advanced_visualizations(df, viz_type, [selected_numeric, selected_categorical])
+        if fig:
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Select appropriate columns and visualization type to generate chart.")
+        
+        st.subheader("Advanced Metrics")
+        if selected_numeric:
+            metrics = calculate_advanced_metrics(df, [selected_numeric])[selected_numeric]
+            cols = st.columns(4)
+            with cols[0]:
+                st.metric("Total", f"{metrics['total']:,.2f}", help="Sum of all values")
+            with cols[1]:
+                st.metric("Average", f"{metrics['average']:,.2f}", help="Mean value per record")
+            with cols[2]:
+                st.metric("Growth Rate", f"{metrics['growth_rate']:.1f}%", help="Period-over-period growth")
+            with cols[3]:
+                st.metric("Volatility", f"{metrics['volatility']:.1f}%", help="Coefficient of variation")
+    
+    elif tab == "AI Assistant":
+        st.header("Conkt AI Assistant")
+        st.markdown("Ask questions about your data in plain English.")
+        
+        if st.session_state.uploaded_data is None:
+            st.warning("Please upload data or load sample data to use the AI Assistant")
+            return
+        
+        query = st.text_input("Ask a business question (e.g., 'What are my revenue trends?')", key="ai_query")
+        if query:
+            with st.spinner("Analyzing your query..."):
+                response, chart = process_advanced_nlp_query(query, st.session_state.uploaded_data)
+                st.session_state.chat_history.append({"query": query, "response": response})
+                st.markdown(f"<div class='chat-user'>You: {query}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='chat-ai'>Conkt AI: {response}</div>", unsafe_allow_html=True)
+                if chart:
+                    st.plotly_chart(chart, use_container_width=True)
+        
+        if st.session_state.chat_history:
+            st.subheader("Chat History")
+            for chat in reversed(st.session_state.chat_history[-10:]):
+                st.markdown(f"<div class='chat-user'>You: {chat['query']}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='chat-ai'>Conkt AI: {chat['response']}</div>", unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()
